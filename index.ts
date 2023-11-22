@@ -1,8 +1,8 @@
 import { JSDOM } from "jsdom";
 import { Axios } from "axios";
-import { createWriteStream, fstat } from "fs";
-import { resolve } from "path";
-import { escape } from "querystring";
+import { createWriteStream } from "fs";
+import { convertHtmlToDelta } from "node-quill-converter";
+import { exit } from "process";
 
 export class Scrapper extends Axios {
   constructor() {
@@ -16,6 +16,8 @@ export class Scrapper extends Axios {
       console.debug(`[${locale}] - Getting ${decodeURI(endpoint)}`);
       const resp = await this.get(endpoint);
 
+      endpoint = decodeURI(endpoint);
+
       const {
         window: { document },
       } = new JSDOM(resp.data);
@@ -27,16 +29,31 @@ export class Scrapper extends Axios {
       const pdfs = [
         ...(artPost?.querySelectorAll<HTMLAnchorElement>("a[href$='.pdf']") ??
           []),
-      ].map((node) => `https://www.khidmat-almostahlik.ma${node.href}`);
+      ].map((node) =>
+        decodeURI(`https://www.khidmat-almostahlik.ma${node.href}`)
+      );
 
       const nextLink =
         document.querySelector<HTMLAnchorElement>('a[xml\\:lang="ar"]')?.href;
-
+      const slug = endpoint.substring(11).replace(/\//g, "-");
       return {
         pdfs,
         title,
-        endpoint: decodeURI(endpoint),
-        content: {},
+        slug,
+        endpoint,
+        content: {
+          blocks: [
+            {
+              id: "g8c8m6G-7v",
+              type: "legacy",
+              data: {
+                body: [...convertHtmlToDelta(body).ops],
+              },
+            },
+          ],
+          time: 1686324729267,
+          version: "2.26.5",
+        },
         body,
         i18nLocaleId: locale,
         nextLink,
@@ -106,8 +123,14 @@ async function main() {
     scrapper.getRights(),
   ]);
 
-  const stream = createWriteStream("./data.json");
-  stream.write(JSON.stringify([...regulations, ...rights], null, 4));
+  const stream = createWriteStream("./data.json", {
+    autoClose: true,
+  });
+  stream.write(JSON.stringify([...regulations, ...rights], null, 2), (err) => {
+    if (err) console.error(err);
+    stream.close();
+    exit(0);
+  });
 }
 
 main().catch(console.error);
