@@ -73,11 +73,18 @@ export class Scrapper extends Axios {
           delete arabicData["nextLink"];
           arr.push({
             type: "PAGE",
-            translations: [frenchData, arabicData],
+            translations: this.renameDuplicateSlug([frenchData, arabicData]),
           });
         }
       }
     }
+  }
+
+  private renameDuplicateSlug(arr: { slug: string }[]) {
+    if (arr.length == 2 && arr[0].slug === arr[1].slug) {
+      arr[1].slug = `ar-${arr[1].slug}`;
+    }
+    return arr;
   }
 
   async getRegulations() {
@@ -114,19 +121,43 @@ export class Scrapper extends Axios {
     }
     return arr;
   }
+
+  async getPageByEndpoint(endpoint: string) {
+    const arr: unknown[] = [];
+    const {
+      window: { document },
+    } = new JSDOM();
+    const anchor = document.createElement("a");
+    anchor.href = endpoint;
+    const nodes = [anchor] as unknown as NodeListOf<HTMLAnchorElement>;
+    await this.getPages(arr, nodes);
+    return arr;
+  }
 }
 
 async function main() {
   const scrapper = new Scrapper();
-  const [regulations, rights] = await Promise.all([
-    scrapper.getRegulations(),
-    scrapper.getRights(),
-  ]);
+  const data = (
+    await Promise.all([
+      scrapper.getPageByEndpoint("/portal/fr/propos-du-portail"),
+      scrapper.getRegulations(),
+      scrapper.getRights(),
+      scrapper.getPageByEndpoint(
+        "/portal/fr/association-de-protection-du-consommateur-pour-quoi-faire"
+      ),
+      scrapper.getPageByEndpoint("/portal/fr/faq"),
+      scrapper.getPageByEndpoint("/portal/fr/mentions-légales"),
+    ])
+  ).reduce((acc, value) => {
+    acc.push(...value);
+    return acc;
+  }, []);
 
   const stream = createWriteStream("./data.json", {
     autoClose: true,
   });
-  stream.write(JSON.stringify([...regulations, ...rights], null, 2), (err) => {
+  console.log(`Wrote ${data.length} records.`);
+  stream.write(JSON.stringify(data, null, 2), (err) => {
     if (err) console.error(err);
     stream.close();
     exit(0);
