@@ -4,6 +4,27 @@ import { createWriteStream } from "fs";
 import { convertHtmlToDelta } from "node-quill-converter";
 import { exit } from "process";
 
+type Iterableify<T> = { [K in keyof T]: Iterable<T[K]> };
+
+function* zip<T extends Array<any>>(...toZip: Iterableify<T>): Generator<T> {
+  // Get iterators for all of the iterables.
+  const iterators = toZip.map((i) => i[Symbol.iterator]());
+
+  while (true) {
+    // Advance all of the iterators.
+    const results = iterators.map((i) => i.next());
+
+    // If any of the iterators are done, we should stop.
+    if (results.some(({ done }) => done)) {
+      break;
+    }
+
+    // We can assert the yield type, since we know none
+    // of the iterators are done.
+    yield results.map(({ value }) => value) as T;
+  }
+}
+
 export class Scrapper extends Axios {
   constructor() {
     super({
@@ -70,11 +91,7 @@ export class Scrapper extends Axios {
     }
   }
 
-  async getPages(
-    type: "PAGE" | "ARTICLE",
-    arr: unknown[],
-    nodes: NodeListOf<HTMLAnchorElement>
-  ) {
+  async getPages(arr: unknown[], nodes: NodeListOf<HTMLAnchorElement>) {
     for (const node of nodes) {
       let translations: any = [];
 
@@ -90,7 +107,7 @@ export class Scrapper extends Axios {
         }
       }
       arr.push({
-        type,
+        type: "PAGE",
         translations: translations,
       });
     }
@@ -113,7 +130,7 @@ export class Scrapper extends Axios {
       const nodes = document
         .querySelector(".site-map-menu .expanded")
         ?.querySelectorAll<HTMLAnchorElement>(".leaf a");
-      if (nodes) await this.getPages("PAGE", arr, nodes);
+      if (nodes) await this.getPages(arr, nodes);
     } catch (err) {
       console.error(err);
     }
@@ -131,7 +148,7 @@ export class Scrapper extends Axios {
       const nodes = document
         .querySelectorAll(".site-map-menu .expanded")[8]
         ?.querySelectorAll<HTMLAnchorElement>(".leaf a");
-      if (nodes) await this.getPages("PAGE", arr, nodes);
+      if (nodes) await this.getPages(arr, nodes);
     } catch (err) {
       console.error(err);
     }
@@ -146,8 +163,37 @@ export class Scrapper extends Axios {
     const anchor = document.createElement("a");
     anchor.href = endpoint;
     const nodes = [anchor] as unknown as NodeListOf<HTMLAnchorElement>;
-    await this.getPages(type, arr, nodes);
+    await this.getPages(arr, nodes);
     return arr;
+  }
+  async getArticlePages(
+    arr: unknown[],
+    nodes: (HTMLAnchorElement | null)[],
+    dates: (HTMLSpanElement | null)[]
+  ) {
+    for (const [node, date] of zip(nodes, dates)) {
+      if (!node || !date) continue;
+      let translations: any = [];
+
+      const frenchData = await this.getPage(node.href, "fr");
+      translations.push(frenchData);
+      if (frenchData?.nextLink) {
+        const arabicData = await this.getPage(frenchData.nextLink, "ar");
+        if (arabicData) {
+          delete frenchData["nextLink"];
+          delete arabicData["nextLink"];
+          translations.push(arabicData);
+          this.renameDuplicateSlug(translations);
+        }
+      }
+      arr.push({
+        type: "ARTICLE",
+        createdAt: new Date(
+          date.getAttribute("content")?.substring(0, 10) ?? new Date()
+        ),
+        translations: translations,
+      });
+    }
   }
 
   async getArticles() {
@@ -157,10 +203,18 @@ export class Scrapper extends Axios {
       const {
         window: { document },
       } = new JSDOM(resp.data);
-      const nodes = document.querySelectorAll<HTMLAnchorElement>(
-        ".more-link-actualite > a"
+      const articles = Array.from(
+        document.querySelectorAll(".art-post")[1].querySelectorAll(".views-row")
       );
-      if (nodes) await this.getPages("ARTICLE", arr, nodes);
+      const nodes = articles.map((document) =>
+        document.querySelector<HTMLAnchorElement>(".more-link-actualite > a")
+      );
+      const dates = articles.map((document) =>
+        document.querySelector<HTMLSpanElement>(".date-display-single")
+      );
+
+      console.log(nodes.length, dates.length);
+      if (nodes) await this.getArticlePages(arr, nodes, dates);
     } catch (err) {
       console.error(err);
     }
