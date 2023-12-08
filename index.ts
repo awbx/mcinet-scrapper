@@ -24,7 +24,7 @@ export class Scrapper extends Axios {
 
       const artPost = document.querySelectorAll(".art-post")[1];
       const title =
-        artPost?.querySelector<HTMLHeadingElement>("h2")?.textContent ?? "";
+        artPost?.querySelector<HTMLHeadingElement>("h2")?.textContent;
       const body = artPost?.outerHTML ?? "";
       const pdfs = [
         ...(artPost?.querySelectorAll<HTMLAnchorElement>("a[href$='.pdf']") ??
@@ -33,12 +33,19 @@ export class Scrapper extends Axios {
         decodeURI(`https://www.khidmat-almostahlik.ma${node.href}`)
       );
 
+      const description = artPost?.querySelector("p")?.textContent ?? "";
+      const images = Array.from(
+        artPost?.querySelectorAll<HTMLImageElement>("img") ?? []
+      ).map(({ src }) => decodeURI(src.replace("/styles/medium/public", "")));
+
       const nextLink =
         document.querySelector<HTMLAnchorElement>('a[xml\\:lang="ar"]')?.href;
       const slug = endpoint.substring(11).replace(/\//g, "-");
       return {
         pdfs,
         title,
+        description: description ?? title,
+        images,
         slug,
         endpoint,
         content: {
@@ -63,20 +70,29 @@ export class Scrapper extends Axios {
     }
   }
 
-  async getPages(arr: unknown[], nodes: NodeListOf<HTMLAnchorElement>) {
+  async getPages(
+    type: "PAGE" | "ARTICLE",
+    arr: unknown[],
+    nodes: NodeListOf<HTMLAnchorElement>
+  ) {
     for (const node of nodes) {
+      let translations: any = [];
+
       const frenchData = await this.getPage(node.href, "fr");
+      translations.push(frenchData);
       if (frenchData?.nextLink) {
         const arabicData = await this.getPage(frenchData.nextLink, "ar");
         if (arabicData) {
           delete frenchData["nextLink"];
           delete arabicData["nextLink"];
-          arr.push({
-            type: "PAGE",
-            translations: this.renameDuplicateSlug([frenchData, arabicData]),
-          });
+          translations.push(arabicData);
+          this.renameDuplicateSlug(translations);
         }
       }
+      arr.push({
+        type,
+        translations: translations,
+      });
     }
   }
 
@@ -97,7 +113,7 @@ export class Scrapper extends Axios {
       const nodes = document
         .querySelector(".site-map-menu .expanded")
         ?.querySelectorAll<HTMLAnchorElement>(".leaf a");
-      if (nodes) await this.getPages(arr, nodes);
+      if (nodes) await this.getPages("PAGE", arr, nodes);
     } catch (err) {
       console.error(err);
     }
@@ -115,14 +131,14 @@ export class Scrapper extends Axios {
       const nodes = document
         .querySelectorAll(".site-map-menu .expanded")[8]
         ?.querySelectorAll<HTMLAnchorElement>(".leaf a");
-      if (nodes) await this.getPages(arr, nodes);
+      if (nodes) await this.getPages("PAGE", arr, nodes);
     } catch (err) {
       console.error(err);
     }
     return arr;
   }
 
-  async getPageByEndpoint(endpoint: string) {
+  async getPageByEndpoint(endpoint: string, type: "PAGE" | "ARTICLE") {
     const arr: unknown[] = [];
     const {
       window: { document },
@@ -130,28 +146,50 @@ export class Scrapper extends Axios {
     const anchor = document.createElement("a");
     anchor.href = endpoint;
     const nodes = [anchor] as unknown as NodeListOf<HTMLAnchorElement>;
-    await this.getPages(arr, nodes);
+    await this.getPages(type, arr, nodes);
+    return arr;
+  }
+
+  async getArticles() {
+    const arr: unknown[] = [];
+    try {
+      const resp = await this.get("/portal/fr/actualites");
+      const {
+        window: { document },
+      } = new JSDOM(resp.data);
+      const nodes = document.querySelectorAll<HTMLAnchorElement>(
+        ".more-link-actualite > a"
+      );
+      if (nodes) await this.getPages("ARTICLE", arr, nodes);
+    } catch (err) {
+      console.error(err);
+    }
     return arr;
   }
 }
 
 async function main() {
   const scrapper = new Scrapper();
-  const data = (
-    await Promise.all([
-      scrapper.getPageByEndpoint("/portal/fr/propos-du-portail"),
-      scrapper.getRegulations(),
-      scrapper.getRights(),
-      scrapper.getPageByEndpoint(
-        "/portal/fr/association-de-protection-du-consommateur-pour-quoi-faire"
-      ),
-      scrapper.getPageByEndpoint("/portal/fr/faq"),
-      scrapper.getPageByEndpoint("/portal/fr/mentions-légales"),
-    ])
-  ).reduce((acc, value) => {
-    acc.push(...value);
-    return acc;
-  }, []);
+  // //  pages data
+  // const data = (
+  //   await Promise.all([
+  //     scrapper.getPageByEndpoint("/portal/fr/propos-du-portail", "PAGE"),
+  //     scrapper.getRegulations(),
+  //     scrapper.getRights(),
+  //     scrapper.getPageByEndpoint(
+  //       "/portal/fr/association-de-protection-du-consommateur-pour-quoi-faire",
+  //       "PAGE"
+  //     ),
+  //     scrapper.getPageByEndpoint("/portal/fr/faq", "PAGE"),
+  //     scrapper.getPageByEndpoint("/portal/fr/mentions-légales", "PAGE"),
+  //   ])
+  // ).reduce((acc, value) => {
+  //   acc.push(...value);
+  //   return acc;
+  // }, []);
+
+  // articles data
+  const data = await scrapper.getArticles();
 
   const stream = createWriteStream("./data.json", {
     autoClose: true,
